@@ -48,6 +48,12 @@ h2{font-size:17px;margin:0 0 10px}
 .tag.go{background:var(--amber);color:#111}
 .tag.stop{background:var(--red);color:#111}
 .tag.soon{background:#3b2a07;color:var(--amber)}
+.tag.t-regular{background:#1e293b;color:var(--white);border:1px solid #475569}
+.tag.t-nestle{background:#3b0764;color:#e9d5ff;border:1px solid #a855f7}
+.field{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.field label{font-weight:600;white-space:nowrap}
+select{flex:1;min-width:0;min-height:44px;background:#070c17;color:var(--white);border:1px solid var(--line);border-radius:8px;padding:0 10px;font:16px 'Sarabun',sans-serif}
+select:focus{outline:2px solid var(--cyan);border-color:transparent}
 .info{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:4px 14px;margin-top:8px;font-size:15px}
 .info span{color:var(--muted)}
 .err{border:1px dashed var(--red);border-radius:8px;padding:8px 10px;margin-bottom:8px;font-size:15px}
@@ -67,10 +73,14 @@ h2{font-size:17px;margin:0 0 10px}
   </header>
 
   <section class="panel">
+    <div class="field">
+      <label for="productSelect">สินค้า</label>
+      <select id="productSelect"></select>
+    </div>
     <div class="legend">
       <div><b class="c-exp">1-3</b> หมดอายุ</div>
       <div><b class="c-rcv">4-6</b> รับเข้า</div>
-      <div><b class="c-lot">7</b> ลำดับ LOT</div>
+      <div><b class="c-lot">7</b> LOT (เลข = ธรรมดา · อักษร = เนสเล่)</div>
       <div><b class="c-mfg">8-10</b> ผลิต</div>
     </div>
     <textarea id="batchInput" placeholder="เช่น F6UPXT1LXT" autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
@@ -94,9 +104,15 @@ const YEAR_CODES  = 'NOPQRSTUVWXYZ';                   // ปี 2020-2032
 const YEAR_BASE   = 2020;
 const BATCH_LEN   = 10;
 
+// ตารางสินค้า — เพิ่มสินค้าใหม่ = เพิ่ม 1 แถว (lotRule = กติกาอ่านหลักที่ 7 ดู decodeLot)
+const PRODUCTS = [
+  { code: '4100005', name: 'กัวกัม (GUAR GUM)', lotRule: 'GUAR' }
+];
+const LETTER_CODES = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'; // เนสเล่: A=1 B=2 … Z=26
+
 // ===== 2. STATE =====
-// ไม่เก็บข้อมูลลงเครื่อง (ตาม spec เฟสแรก) — state มีแค่ข้อความในช่องกรอก
-const state = { input: '' };
+// ไม่เก็บข้อมูลลงเครื่อง (ตาม spec เฟสแรก) — state มีแค่สินค้าที่เลือก + ข้อความในช่องกรอก
+const state = { product: PRODUCTS[0].code, input: '' };
 
 // ===== 3. DATA LAYER =====
 // เฟสแรกไม่มีการบันทึก/โหลด (ไม่ใช้ localStorage) จึงไม่มี migrate
@@ -118,21 +134,40 @@ function decodeDate(dc, mc, yc, label){
   return { iso: `${y}-${pad2(m)}-${pad2(d)}` };
 }
 
-// ถอดเลข Batch 1 ตัว → null (บรรทัดว่าง) หรือ { code, exp, rcv, lot, mfg, errors[] }
-function decodeBatch(raw){
+// หาสินค้าจากรหัส — ไม่เจอ/ไม่ส่งมา ใช้สินค้าตัวแรก
+function getProduct(productCode){
+  return PRODUCTS.find(p => p.code === productCode) || PRODUCTS[0];
+}
+
+// อ่านหลักที่ 7 ตามกติกาของสินค้า → { lot, type, typeLabel } หรือ { error }
+function decodeLot(ch, lotRule){
+  if (/^[1-9]$/.test(ch || '')) {
+    return { lot: Number(ch), type: 'REGULAR', typeLabel: lotRule === 'GUAR' ? 'กัวกัมธรรมดา' : '' };
+  }
+  if (lotRule === 'GUAR') {
+    const i = LETTER_CODES.indexOf(ch);
+    if (ch && i !== -1) return { lot: i + 1, type: 'NESTLE', typeLabel: 'เนสเล่' };
+    return { error: `ลำดับ LOT (หลักที่ 7): "${ch}" ต้องเป็นตัวเลข 1-9 (กัวกัมธรรมดา) หรือตัวอักษร A-Z (เนสเล่)` };
+  }
+  return { error: `ลำดับ LOT (หลักที่ 7): "${ch}" ต้องเป็นตัวเลข 1-9` };
+}
+
+// ถอดเลข Batch 1 ตัว → null (บรรทัดว่าง) หรือ { code, exp, rcv, lot, lotChar, type, typeLabel, mfg, errors[] }
+function decodeBatch(raw, productCode){
   const code = String(raw == null ? '' : raw).replace(/\s+/g, '').toUpperCase();
   if (!code) return null;
   if (code.length !== BATCH_LEN) return { code, errors: [`ต้องมี ${BATCH_LEN} หลัก (ตอนนี้ ${code.length} หลัก)`] };
   const exp = decodeDate(code[0], code[1], code[2], 'วันหมดอายุ');
   const rcv = decodeDate(code[3], code[4], code[5], 'วันรับเข้า');
   const mfg = decodeDate(code[7], code[8], code[9], 'วันผลิต');
-  const lot = /^[1-9]$/.test(code[6]) ? Number(code[6]) : null;
+  const lt  = decodeLot(code[6], getProduct(productCode).lotRule);
+  const lot = lt.error ? null : lt.lot;
   const errors = [];
   if (exp.error) errors.push(exp.error);
   if (rcv.error) errors.push(rcv.error);
-  if (lot === null) errors.push(`ลำดับ LOT (หลักที่ 7): "${code[6]}" ต้องเป็นตัวเลข 1-9`);
+  if (lt.error) errors.push(lt.error);
   if (mfg.error) errors.push(mfg.error);
-  return { code, exp: exp.iso, rcv: rcv.iso, lot, mfg: mfg.iso, errors };
+  return { code, exp: exp.iso, rcv: rcv.iso, lot, lotChar: code[6], type: lt.type, typeLabel: lt.typeLabel, mfg: mfg.iso, errors };
 }
 
 // จำนวนวันจาก a ถึง b (ISO yyyy-mm-dd)
@@ -146,10 +181,11 @@ function compareFefo(a, b){
 }
 
 // รับรายการบรรทัด → แยกเป็น valid (เรียงลำดับจ่าย) / expired (ห้ามจ่าย) / invalid (เลขผิด)
-function rankBatches(lines, todayIso){
+// + groups: valid แยกตามประเภท (ธรรมดาก่อน แล้วเนสเล่) แต่ละกลุ่มนับลำดับจ่ายของตัวเอง
+function rankBatches(lines, todayIso, productCode){
   const valid = [], expired = [], invalid = [];
   (lines || []).forEach((raw, i) => {
-    const b = decodeBatch(raw);
+    const b = decodeBatch(raw, productCode);
     if (!b) return;
     b.line = i + 1;
     if (b.errors.length) { invalid.push(b); return; }
@@ -158,7 +194,13 @@ function rankBatches(lines, todayIso){
   });
   valid.sort(compareFefo);
   expired.sort(compareFefo);
-  return { valid, expired, invalid };
+  const groups = ['REGULAR', 'NESTLE']
+    .map(type => {
+      const items = valid.filter(b => b.type === type); // valid เรียงแล้ว → แต่ละกลุ่มเรียงตาม compareFefo ด้วย
+      return { type, label: items.length ? items[0].typeLabel : '', items };
+    })
+    .filter(g => g.items.length);
+  return { valid, expired, invalid, groups };
 }
 
 function todayIso(){
@@ -185,13 +227,24 @@ function daysText(n){
   return `เหลือ ${n} วัน`;
 }
 
+// ป้ายประเภทสินค้า (ธรรมดา / เนสเล่)
+function typeTag(b){
+  if (!b.typeLabel) return '';
+  return `<span class="tag ${b.type === 'NESTLE' ? 't-nestle' : 't-regular'}">${esc(b.typeLabel)}</span>`;
+}
+
+// LOT: เนสเล่แสดง "B (ลำดับ 2)" / ธรรมดาแสดงเลข
+function lotText(b){
+  return b.type === 'NESTLE' ? `${esc(b.lotChar)} (ลำดับ ${b.lot})` : `${b.lot}`;
+}
+
 function cardHtml(b, rankLabel, cls, tag){
   return `<div class="card ${cls}">
-    <div class="card-top"><div class="rank">${rankLabel}</div>${codeHtml(b.code)}${tag}</div>
+    <div class="card-top"><div class="rank">${rankLabel}</div>${codeHtml(b.code)}${typeTag(b)}${tag}</div>
     <div class="info">
       <div><span>หมดอายุ:</span> <b class="c-exp">${fmtDate(b.exp)}</b> (${daysText(b.daysLeft)})</div>
       <div><span>รับเข้า:</span> <b class="c-rcv">${fmtDate(b.rcv)}</b></div>
-      <div><span>LOT:</span> <b>${b.lot}</b></div>
+      <div><span>LOT:</span> <b>${lotText(b)}</b></div>
       <div><span>ผลิต:</span> <b class="c-mfg">${fmtDate(b.mfg)}</b></div>
     </div>
   </div>`;
@@ -199,7 +252,7 @@ function cardHtml(b, rankLabel, cls, tag){
 
 function render(){
   const lines = state.input.split(/\r?\n/);
-  const r = rankBatches(lines, todayIso());
+  const r = rankBatches(lines, todayIso(), state.product);
   const total = r.valid.length + r.expired.length + r.invalid.length;
   document.getElementById('countText').textContent = total ? `ทั้งหมด ${total} Batch` : '';
   const out = document.getElementById('result');
@@ -211,14 +264,15 @@ function render(){
     html += r.expired.map(b => cardHtml(b, '✕', 'expired', '<span class="tag stop">ห้ามจ่าย</span>')).join('');
     html += '</div>';
   }
-  if (r.valid.length) {
-    html += `<div class="panel"><h2>ลำดับการจ่าย (${r.valid.length})</h2>`;
-    html += r.valid.map((b, i) => {
+  r.groups.forEach(g => {
+    const title = g.label ? `ลำดับการจ่าย — ${esc(g.label)}` : 'ลำดับการจ่าย';
+    html += `<div class="panel"><h2>${title} (${g.items.length})</h2>`;
+    html += g.items.map((b, i) => {
       const tag = i === 0 ? '<span class="tag go">จ่ายก่อน</span>' : (b.daysLeft === 0 ? '<span class="tag soon">หมดอายุวันนี้</span>' : '');
       return cardHtml(b, i + 1, i === 0 ? 'first' : '', tag);
     }).join('');
     html += '</div>';
-  }
+  });
   if (r.invalid.length) {
     html += `<div class="panel"><h2 style="color:var(--red)">เลข Batch ไม่ถูกต้อง (${r.invalid.length})</h2>`;
     html += r.invalid.map(b => `<div class="err">บรรทัด ${b.line}: <span class="code">${esc(b.code)}</span><br>${b.errors.map(esc).join('<br>')}</div>`).join('');
@@ -229,6 +283,10 @@ function render(){
 
 // ===== 6. EVENT HANDLERS =====
 const inputEl = document.getElementById('batchInput');
+const productEl = document.getElementById('productSelect');
+productEl.innerHTML = PRODUCTS.map(p => `<option value="${esc(p.code)}">${esc(p.code)} — ${esc(p.name)}</option>`).join('');
+productEl.value = state.product;
+productEl.addEventListener('change', () => { state.product = productEl.value; render(); });
 inputEl.addEventListener('input', () => { state.input = inputEl.value; render(); });
 document.getElementById('btnClear').addEventListener('click', () => {
   inputEl.value = ''; state.input = ''; render(); inputEl.focus();
@@ -252,7 +310,22 @@ test('วันในตำแหน่งวันห้ามเป็น I O 
 test('31 ก.พ. = วันที่ไม่มีจริง', () => { if (!decodeDate('Z', '2', 'T', 'x').error) throw new Error('ควร error'); });
 test('29 ก.พ. ปีอธิกสุรทิน 2028 ผ่าน / 2027 ไม่ผ่าน', () => { assertEq(decodeDate('X', '2', 'V', 'x').iso, '2028-02-29'); if (!decodeDate('X', '2', 'U', 'x').error) throw new Error('2027'); });
 test('ความยาวไม่ครบ 10 หลัก = error', () => { assertEq(decodeBatch('F6UPXT1LX').errors.length, 1); assertEq(decodeBatch('F6UPXT1LXTT').errors.length, 1); });
-test('LOT ต้องเป็น 1-9', () => { assertEq(decodeBatch('F6UPXT0LXT').errors.length, 1); assertEq(decodeBatch('F6UPXTALXT').errors.length, 1); });
+test('LOT: 0 และสัญลักษณ์ = error / A (เนสเล่) ผ่าน', () => { assertEq(decodeBatch('F6UPXT0LXT').errors.length, 1); assertEq(decodeBatch('F6UPXT#LXT').errors.length, 1); assertEq(decodeBatch('F6UPXTALXT').errors, []); });
+test('กัวกัม: เลข = ธรรมดา', () => { const b = decodeBatch('F6UPXT1LXT', '4100005'); assertEq([b.type, b.typeLabel, b.lot], ['REGULAR', 'กัวกัมธรรมดา', 1]); });
+test('กัวกัม: อักษร = เนสเล่ B = ลำดับ 2', () => { const b = decodeBatch('F6UPXTBLXT', '4100005'); assertEq([b.type, b.typeLabel, b.lot, b.lotChar], ['NESTLE', 'เนสเล่', 2, 'B']); });
+test('เนสเล่: ตัวพิมพ์เล็ก b ใช้ได้', () => assertEq(decodeBatch('f6upxtblxt', '4100005').lot, 2));
+test('ใส่ปนกัน → แยก 2 กลุ่ม ธรรมดาก่อน เนสเล่ทีหลัง', () => {
+  const r = rankBatches(['F6UPXTBLXT', 'F6UPXT1LXT', 'A3UPXTALXT', 'F6UPXT2LXT'], '2026-11-23', '4100005');
+  assertEq(r.groups.map(g => [g.type, g.label, g.items.length]), [['REGULAR', 'กัวกัมธรรมดา', 2], ['NESTLE', 'เนสเล่', 2]]);
+  assertEq(r.valid.length, 4);
+});
+test('เนสเล่ หมดอายุเท่ากัน → A, B, C', () => {
+  const r = rankBatches(['F6UPXTCLXT', 'F6UPXTALXT', 'F6UPXTBLXT'], '2026-11-23', '4100005');
+  assertEq(r.groups[0].items.map(b => b.lotChar), ['A', 'B', 'C']);
+});
+test('รหัสสินค้าไม่รู้จัก → ใช้สินค้าตัวแรก', () => assertEq(decodeBatch('F6UPXTBLXT', '9999999').type, 'NESTLE'));
+test('ใส่แต่ธรรมดา → มีกลุ่มเดียว', () => assertEq(rankBatches(['F6UPXT1LXT', 'F6UPXT2LXT'], '2026-11-23', '4100005').groups.length, 1));
+test('ตารางสินค้ามี 4100005 กัวกัม', () => assertEq([PRODUCTS[0].code, PRODUCTS[0].lotRule], ['4100005', 'GUAR']));
 test('ปีนอกตาราง (เช่น A) = error', () => assertEq(decodeBatch('F6APXT1LXT').errors.length, 1));
 test('เรียงตามวันหมดอายุเร็วสุดก่อน', () => {
   const r = rankBatches(['F6UPXT1LXT', 'A3UPXT1LXT', 'F6VPXT1LXT'], '2026-11-23');
