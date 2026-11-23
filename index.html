@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FIFO RAWMAT — แปลงเลข Batch</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+/* ===== variables ===== */
+:root{
+  --bg:#0b1220; --panel:#111a2e; --line:#1e2a44; --text:#e5edf9; --muted:#8a9ab8;
+  --amber:#f59e0b; --cyan:#22d3ee; --green:#4ade80; --red:#f87171; --white:#f8fafc;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+/* ===== base ===== */
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 'Sarabun',system-ui,sans-serif;
+  background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);
+  background-size:32px 32px;background-attachment:fixed}
+/* ===== layout ===== */
+.wrap{max-width:760px;margin:0 auto;padding:16px}
+header h1{margin:0;font-size:22px;color:var(--amber)}
+header p{margin:2px 0 12px;color:var(--muted);font-size:14px}
+/* ===== components ===== */
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:14px}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:14px;color:var(--muted);margin-bottom:8px}
+.legend b{font-family:var(--mono)}
+textarea{width:100%;min-height:140px;resize:vertical;background:#070c17;color:var(--white);border:1px solid var(--line);
+  border-radius:8px;padding:10px;font:18px/1.6 var(--mono);text-transform:uppercase;letter-spacing:2px}
+textarea:focus{outline:2px solid var(--cyan);border-color:transparent}
+.row{display:flex;gap:10px;margin-top:10px;align-items:center;flex-wrap:wrap}
+button{min-height:44px;padding:0 18px;border-radius:8px;border:1px solid var(--line);background:#1a2540;color:var(--text);
+  font:600 16px 'Sarabun',sans-serif;cursor:pointer}
+button:active{transform:scale(.97)}
+.count{color:var(--muted);font-size:14px}
+h2{font-size:17px;margin:0 0 10px}
+.card{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:#0d1528}
+.card.first{border:2px solid var(--amber);background:#1d1608}
+.card.expired{border-color:var(--red);background:#200d10}
+.card-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.rank{min-width:40px;height:40px;border-radius:50%;display:grid;place-items:center;font:700 18px var(--mono);background:#1a2540}
+.first .rank{background:var(--amber);color:#111}
+.expired .rank{background:var(--red);color:#111}
+.code{font:700 20px var(--mono);letter-spacing:2px}
+.c-exp{color:var(--amber)} .c-rcv{color:var(--cyan)} .c-lot{color:var(--white)} .c-mfg{color:var(--green)}
+.tag{font-size:13px;font-weight:700;padding:2px 10px;border-radius:999px}
+.tag.go{background:var(--amber);color:#111}
+.tag.stop{background:var(--red);color:#111}
+.tag.soon{background:#3b2a07;color:var(--amber)}
+.info{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:4px 14px;margin-top:8px;font-size:15px}
+.info span{color:var(--muted)}
+.err{border:1px dashed var(--red);border-radius:8px;padding:8px 10px;margin-bottom:8px;font-size:15px}
+.err .code{font-size:16px;color:var(--red)}
+.empty{color:var(--muted);text-align:center;padding:16px 0}
+#tests{font:13px/1.5 var(--mono)} #tests .ok{color:var(--green)} #tests .bad{color:var(--red)}
+.hidden{display:none}
+/* ===== @media ===== */
+@media (max-width:480px){ .code{font-size:18px;letter-spacing:1px} header h1{font-size:20px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>แปลงเลข Batch → ลำดับจ่าย (FEFO)</h1>
+    <p>ใส่เลข Batch 10 หลัก บรรทัดละ 1 ตัว (พิมพ์เอง หรือยิงบาร์โค้ด) ระบบจะเรียงว่าตัวไหนควรจ่ายก่อน</p>
+  </header>
+
+  <section class="panel">
+    <div class="legend">
+      <div><b class="c-exp">1-3</b> หมดอายุ</div>
+      <div><b class="c-rcv">4-6</b> รับเข้า</div>
+      <div><b class="c-lot">7</b> ลำดับ LOT</div>
+      <div><b class="c-mfg">8-10</b> ผลิต</div>
+    </div>
+    <textarea id="batchInput" placeholder="เช่น F6UPXT1LXT" autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+    <div class="row">
+      <button id="btnClear" type="button">ล้างทั้งหมด</button>
+      <span class="count" id="countText"></span>
+    </div>
+  </section>
+
+  <section id="result"></section>
+
+  <section class="panel hidden" id="testPanel"><h2>ผลทดสอบ</h2><div id="tests"></div></section>
+</div>
+
+<script>
+// ===== 1. CONFIG & CONSTANTS =====
+// ตารางรหัสจากการ์ด "Packaging" หน้างาน — ตำแหน่งในสตริง = ค่า (เริ่มที่ 1)
+const DAY_CODES   = '123456789ABCDEFGHJKLMNPRSTUVXYZ'; // วัน 1-31 (ไม่มี I O Q W)
+const MONTH_CODES = '123456789WXZ';                    // เดือน 1-12 (10=W 11=X 12=Z)
+const YEAR_CODES  = 'NOPQRSTUVWXYZ';                   // ปี 2020-2032
+const YEAR_BASE   = 2020;
+const BATCH_LEN   = 10;
+
+// ===== 2. STATE =====
+// ไม่เก็บข้อมูลลงเครื่อง (ตาม spec เฟสแรก) — state มีแค่ข้อความในช่องกรอก
+const state = { input: '' };
+
+// ===== 3. DATA LAYER =====
+// เฟสแรกไม่มีการบันทึก/โหลด (ไม่ใช้ localStorage) จึงไม่มี migrate
+
+// ===== 4. BUSINESS LOGIC (pure functions — ห้ามแตะ DOM) =====
+function pad2(n){ return String(n).padStart(2, '0'); }
+
+// ถอดรหัส 3 ตัว (วัน เดือน ปี) → { iso } หรือ { error }
+function decodeDate(dc, mc, yc, label){
+  const d = DAY_CODES.indexOf(dc) + 1;
+  const m = MONTH_CODES.indexOf(mc) + 1;
+  const yi = YEAR_CODES.indexOf(yc);
+  if (!dc || d === 0)  return { error: `${label}: "${dc}" ไม่ใช่รหัสวัน` };
+  if (!mc || m === 0)  return { error: `${label}: "${mc}" ไม่ใช่รหัสเดือน` };
+  if (!yc || yi === -1) return { error: `${label}: "${yc}" ไม่ใช่รหัสปี` };
+  const y = YEAR_BASE + yi;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCMonth() !== m - 1) return { error: `${label}: วันที่ ${d}/${m}/${y + 543} ไม่มีจริง` };
+  return { iso: `${y}-${pad2(m)}-${pad2(d)}` };
+}
+
+// ถอดเลข Batch 1 ตัว → null (บรรทัดว่าง) หรือ { code, exp, rcv, lot, mfg, errors[] }
+function decodeBatch(raw){
+  const code = String(raw == null ? '' : raw).replace(/\s+/g, '').toUpperCase();
+  if (!code) return null;
+  if (code.length !== BATCH_LEN) return { code, errors: [`ต้องมี ${BATCH_LEN} หลัก (ตอนนี้ ${code.length} หลัก)`] };
+  const exp = decodeDate(code[0], code[1], code[2], 'วันหมดอายุ');
+  const rcv = decodeDate(code[3], code[4], code[5], 'วันรับเข้า');
+  const mfg = decodeDate(code[7], code[8], code[9], 'วันผลิต');
+  const lot = /^[1-9]$/.test(code[6]) ? Number(code[6]) : null;
+  const errors = [];
+  if (exp.error) errors.push(exp.error);
+  if (rcv.error) errors.push(rcv.error);
+  if (lot === null) errors.push(`ลำดับ LOT (หลักที่ 7): "${code[6]}" ต้องเป็นตัวเลข 1-9`);
+  if (mfg.error) errors.push(mfg.error);
+  return { code, exp: exp.iso, rcv: rcv.iso, lot, mfg: mfg.iso, errors };
+}
+
+// จำนวนวันจาก a ถึง b (ISO yyyy-mm-dd)
+function daysBetween(aIso, bIso){
+  return Math.round((Date.parse(bIso) - Date.parse(aIso)) / 86400000);
+}
+
+// เกณฑ์จ่าย: หมดอายุเร็วสุดก่อน → LOT น้อยก่อน → รับเข้าเก่าก่อน
+function compareFefo(a, b){
+  return a.exp.localeCompare(b.exp) || (a.lot - b.lot) || a.rcv.localeCompare(b.rcv);
+}
+
+// รับรายการบรรทัด → แยกเป็น valid (เรียงลำดับจ่าย) / expired (ห้ามจ่าย) / invalid (เลขผิด)
+function rankBatches(lines, todayIso){
+  const valid = [], expired = [], invalid = [];
+  (lines || []).forEach((raw, i) => {
+    const b = decodeBatch(raw);
+    if (!b) return;
+    b.line = i + 1;
+    if (b.errors.length) { invalid.push(b); return; }
+    b.daysLeft = daysBetween(todayIso, b.exp);
+    (b.daysLeft < 0 ? expired : valid).push(b);
+  });
+  valid.sort(compareFefo);
+  expired.sort(compareFefo);
+  return { valid, expired, invalid };
+}
+
+function todayIso(){
+  const t = new Date();
+  return `${t.getFullYear()}-${pad2(t.getMonth() + 1)}-${pad2(t.getDate())}`;
+}
+
+// ===== 5. RENDER =====
+function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// แสดงวันที่เป็น พ.ศ. (เก็บภายในเป็น ค.ศ.)
+function fmtDate(iso){
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function codeHtml(c){
+  return `<span class="code"><span class="c-exp">${esc(c.slice(0,3))}</span><span class="c-rcv">${esc(c.slice(3,6))}</span><span class="c-lot">${esc(c[6])}</span><span class="c-mfg">${esc(c.slice(7))}</span></span>`;
+}
+
+function daysText(n){
+  if (n < 0) return `เลยมาแล้ว ${-n} วัน`;
+  if (n === 0) return 'หมดอายุวันนี้';
+  return `เหลือ ${n} วัน`;
+}
+
+function cardHtml(b, rankLabel, cls, tag){
+  return `<div class="card ${cls}">
+    <div class="card-top"><div class="rank">${rankLabel}</div>${codeHtml(b.code)}${tag}</div>
+    <div class="info">
+      <div><span>หมดอายุ:</span> <b class="c-exp">${fmtDate(b.exp)}</b> (${daysText(b.daysLeft)})</div>
+      <div><span>รับเข้า:</span> <b class="c-rcv">${fmtDate(b.rcv)}</b></div>
+      <div><span>LOT:</span> <b>${b.lot}</b></div>
+      <div><span>ผลิต:</span> <b class="c-mfg">${fmtDate(b.mfg)}</b></div>
+    </div>
+  </div>`;
+}
+
+function render(){
+  const lines = state.input.split(/\r?\n/);
+  const r = rankBatches(lines, todayIso());
+  const total = r.valid.length + r.expired.length + r.invalid.length;
+  document.getElementById('countText').textContent = total ? `ทั้งหมด ${total} Batch` : '';
+  const out = document.getElementById('result');
+  if (!total) { out.innerHTML = '<div class="panel empty">ยังไม่มีเลข Batch</div>'; return; }
+
+  let html = '';
+  if (r.expired.length) {
+    html += `<div class="panel"><h2 style="color:var(--red)">⛔ หมดอายุแล้ว — ห้ามจ่าย (${r.expired.length})</h2>`;
+    html += r.expired.map(b => cardHtml(b, '✕', 'expired', '<span class="tag stop">ห้ามจ่าย</span>')).join('');
+    html += '</div>';
+  }
+  if (r.valid.length) {
+    html += `<div class="panel"><h2>ลำดับการจ่าย (${r.valid.length})</h2>`;
+    html += r.valid.map((b, i) => {
+      const tag = i === 0 ? '<span class="tag go">จ่ายก่อน</span>' : (b.daysLeft === 0 ? '<span class="tag soon">หมดอายุวันนี้</span>' : '');
+      return cardHtml(b, i + 1, i === 0 ? 'first' : '', tag);
+    }).join('');
+    html += '</div>';
+  }
+  if (r.invalid.length) {
+    html += `<div class="panel"><h2 style="color:var(--red)">เลข Batch ไม่ถูกต้อง (${r.invalid.length})</h2>`;
+    html += r.invalid.map(b => `<div class="err">บรรทัด ${b.line}: <span class="code">${esc(b.code)}</span><br>${b.errors.map(esc).join('<br>')}</div>`).join('');
+    html += '</div>';
+  }
+  out.innerHTML = html;
+}
+
+// ===== 6. EVENT HANDLERS =====
+const inputEl = document.getElementById('batchInput');
+inputEl.addEventListener('input', () => { state.input = inputEl.value; render(); });
+document.getElementById('btnClear').addEventListener('click', () => {
+  inputEl.value = ''; state.input = ''; render(); inputEl.focus();
+});
+
+// ===== 7. INIT + TEST SUITE (?test=1) =====
+const tests = [];
+function test(name, fn){ tests.push({ name, fn }); }
+function assertEq(a, b, msg){ if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error((msg ? msg + ': ' : '') + `${JSON.stringify(a)} != ${JSON.stringify(b)}`); }
+
+test('ถอดตัวอย่าง F6UPXT1LXT', () => {
+  const b = decodeBatch('F6UPXT1LXT');
+  assertEq([b.exp, b.rcv, b.lot, b.mfg, b.errors], ['2027-06-15', '2026-11-23', 1, '2026-11-20', []]);
+});
+test('ตัวพิมพ์เล็ก + เว้นวรรค ใช้ได้', () => assertEq(decodeBatch(' f6u pxt 1 lxt ').code, 'F6UPXT1LXT'));
+test('บรรทัดว่าง = null', () => { assertEq(decodeBatch(''), null); assertEq(decodeBatch('   '), null); assertEq(decodeBatch(null), null); });
+test('วัน 31 = Z, เดือน 12 = Z, ปี 2032 = Z', () => assertEq(decodeDate('Z', 'Z', 'Z', 'x').iso, '2032-12-31'));
+test('เดือน 10 = W, 11 = X', () => { assertEq(decodeDate('1', 'W', 'N', 'x').iso, '2020-10-01'); assertEq(decodeDate('A', 'X', 'T', 'x').iso, '2026-11-10'); });
+test('ตารางวันครบ 31 ตัว', () => { assertEq(DAY_CODES.length, 31); assertEq(DAY_CODES.indexOf('J') + 1, 18); assertEq(DAY_CODES.indexOf('P') + 1, 23); assertEq(DAY_CODES.indexOf('X') + 1, 29); });
+test('วันในตำแหน่งวันห้ามเป็น I O Q W', () => ['I', 'O', 'Q', 'W'].forEach(c => { if (!decodeDate(c, '1', 'T', 'x').error) throw new Error(c); }));
+test('31 ก.พ. = วันที่ไม่มีจริง', () => { if (!decodeDate('Z', '2', 'T', 'x').error) throw new Error('ควร error'); });
+test('29 ก.พ. ปีอธิกสุรทิน 2028 ผ่าน / 2027 ไม่ผ่าน', () => { assertEq(decodeDate('X', '2', 'V', 'x').iso, '2028-02-29'); if (!decodeDate('X', '2', 'U', 'x').error) throw new Error('2027'); });
+test('ความยาวไม่ครบ 10 หลัก = error', () => { assertEq(decodeBatch('F6UPXT1LX').errors.length, 1); assertEq(decodeBatch('F6UPXT1LXTT').errors.length, 1); });
+test('LOT ต้องเป็น 1-9', () => { assertEq(decodeBatch('F6UPXT0LXT').errors.length, 1); assertEq(decodeBatch('F6UPXTALXT').errors.length, 1); });
+test('ปีนอกตาราง (เช่น A) = error', () => assertEq(decodeBatch('F6APXT1LXT').errors.length, 1));
+test('เรียงตามวันหมดอายุเร็วสุดก่อน', () => {
+  const r = rankBatches(['F6UPXT1LXT', 'A3UPXT1LXT', 'F6VPXT1LXT'], '2026-11-23');
+  assertEq(r.valid.map(b => b.code), ['A3UPXT1LXT', 'F6UPXT1LXT', 'F6VPXT1LXT']);
+});
+test('หมดอายุเท่ากัน → LOT น้อยก่อน', () => {
+  const r = rankBatches(['F6UPXT3LXT', 'F6UPXT1LXT', 'F6UPXT2LXT'], '2026-11-23');
+  assertEq(r.valid.map(b => b.lot), [1, 2, 3]);
+});
+test('หมดอายุ+LOT เท่ากัน → รับเข้าเก่าก่อน', () => {
+  const r = rankBatches(['F6UPXT1LXT', 'F6UAXT1LXT'], '2026-11-23');
+  assertEq(r.valid.map(b => b.rcv), ['2026-11-10', '2026-11-23']);
+});
+test('หมดอายุแล้ว แยกเป็นห้ามจ่าย / หมดวันนี้ยังจ่ายได้', () => {
+  const r = rankBatches(['MXTPXT1LXT', 'PXTPXT1LXT'], '2026-11-23'); // 21 พ.ย. / 23 พ.ย. 2026
+  assertEq(r.expired.map(b => b.code), ['MXTPXT1LXT']);
+  assertEq(r.valid.map(b => [b.code, b.daysLeft]), [['PXTPXT1LXT', 0]]);
+});
+test('แยกเลขผิดออก + จำเลขบรรทัด', () => {
+  const r = rankBatches(['F6UPXT1LXT', '', 'BAD'], '2026-11-23');
+  assertEq([r.valid.length, r.invalid.length, r.invalid[0].line], [1, 1, 3]);
+});
+test('ข้ามปี: เหลือกี่วัน', () => assertEq(daysBetween('2026-12-31', '2027-01-01'), 1));
+test('แสดงปีเป็น พ.ศ.', () => { if (!fmtDate('2026-11-23').includes('2569')) throw new Error(fmtDate('2026-11-23')); });
+
+function runTests(){
+  let pass = 0;
+  const rows = tests.map(t => {
+    try { t.fn(); pass++; return `<div class="ok">✓ ${esc(t.name)}</div>`; }
+    catch (e) { return `<div class="bad">✗ ${esc(t.name)} — ${esc(e.message)}</div>`; }
+  });
+  const panel = document.getElementById('testPanel');
+  panel.classList.remove('hidden');
+  document.getElementById('tests').innerHTML = `<div class="${pass === tests.length ? 'ok' : 'bad'}">ผ่าน ${pass}/${tests.length}</div>` + rows.join('');
+  return { pass, total: tests.length };
+}
+
+render();
+if (new URLSearchParams(location.search).get('test')) window.__testResult = runTests();
+</script>
+</body>
+</html>
