@@ -1,6 +1,7 @@
 """ฝังข้อมูลจากไฟล์ LAY OUT 02 (.xlsx) ลงใน stock.html
 
-ใช้:  python tools/xlsx_to_stock.py "ไฟล์.xlsx" [stock.html]
+ใช้:  python projects/stock-locator/xlsx_to_stock.py "ไฟล์.xlsx" [stock.html]
+      (ไม่ระบุ stock.html = ใช้ stock.html ที่อยู่โฟลเดอร์เดียวกับสคริปต์นี้)
 
 - อ่านชีต "ใบจดสต๊อค" (แถว 4 ลงไป: รหัส, สินค้า, จำนวน, หน่วย, โลเคชั่น, หมายเหตุ)
   และชีต "สินค้า" (MATERIAL CODE, DESCRIPTION, UNIT)
@@ -9,6 +10,7 @@
 """
 import datetime
 import json
+import os
 import sys
 import warnings
 
@@ -27,7 +29,9 @@ def clean(v):
     return str(v).strip()
 
 
-def main(xlsx, html='stock.html'):
+def main(xlsx, html=None):
+    if html is None:
+        html = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'stock.html')
     wb = openpyxl.load_workbook(xlsx, data_only=True, read_only=True)
 
     stock = []
